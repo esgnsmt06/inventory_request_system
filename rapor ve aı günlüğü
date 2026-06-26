@@ -1,0 +1,303 @@
+# Yapay Zeka (AI) Geliştirici Günlüğü
+
+Bu günlük, geliştirici ile yapay zeka kodlama asistanının "Envanter ve Talep Takip Sistemi" projesini çiftler halinde programlama (pair-programming) yöntemiyle geliştirme sürecini 5 ayrı oturum halinde özetlemektedir.
+
+---
+
+## Oturum 1 [23/06/2026] [14:00 - 15:30]
+
+### Hedef
+Flask 3.x, Application Factory, Blueprint mimarisi ve konfigürasyon yapısının kurulması.
+
+### Kullandığım AI Modeli ve Mod
+Gemini 1.5 Pro, Planning & Coding Modu.
+
+### Verdiğim Prompt
+"Flask 3.x, Application Factory (create_app()), Blueprint mimarisi (auth, main, inventory, requests, admin) ve SQLAlchemy 2.x kullanarak bir 'Envanter ve Talep Takip Sistemi' oluştur. Konfigürasyonu Development, Testing ve Production olarak ayır."
+
+### Ajanın Önerdiği Plan
+1. Proje modüler klasör yapısının oluşturulması.
+2. `config.py` dosyasının yazılması.
+3. `app/__init__.py` dosyasının application factory deseniyle yazılması ve blueprint'lerin kaydedilmesi.
+4. Her blueprint için boş placeholder routes modülleri tanımlanması.
+
+### Planda Sorguladığım Noktalar
+Uygulama fabrikasında dairesel import (circular import) hatalarını önlemek için modellerin ve blueprint'lerin nerede ve nasıl import edileceğini sorguladım. Ajan, bunların `create_app()` fonksiyonu içerisinde veya application context açıldıktan sonra import edilmesini önerdi.
+
+### Üretilen Kodda Müdahale Ettiğim Yerler
+Konfigürasyon sınıflarındaki `SECRET_KEY` alanında, production modunda fallback değeri olmaksızın çevre değişkeninden zorunlu okunmasını sağladım.
+
+### Karşılaştığım Hata
+İlk çalıştırmada veritabanı ilklendirilirken context dışı veritabanı erişimi hatası alındı (`RuntimeError: Working outside of application context`).
+
+### Çözüm
+Modellerin ve user_loader fonksiyonunun uygulama bağlamı içinde tanımlanması için `with app.app_context():` bloğu eklendi.
+
+### Öğrenilen Teknik Nokta
+Application Factory yapılarında eklentilerin (`db`, `login_manager`) ilklendirilmesi ile uygulama örneğine bağlanmasının (`init_app`) ayrıştırılması gerektiği pekiştirildi.
+
+---
+
+## Oturum 2 [23/06/2026] [15:45 - 17:15]
+
+### Hedef
+SQLAlchemy 2.x standardında veritabanı modellerinin tanımlanması ve talep durum değişikliklerinin otomatik loglanması.
+
+### Kullandığım AI Modeli ve Mod
+Gemini 1.5 Pro, Coding Modu.
+
+### Verdiğim Prompt
+"User, Department, Category, InventoryItem, InventoryRequest ve RequestLog modellerini SQLAlchemy 2.x stili ile oluştur. Taleplerin durum değişikliklerini otomatik loglayacak event listener'ları yaz."
+
+### Ajanın Önerdiği Plan
+1. `app/models.py` dosyasında `Mapped` ve `mapped_column` kullanılarak 6 tablonun modellenmesi.
+2. `sqlalchemy.event` kütüphanesini kullanarak `InventoryRequest` durum değişimini izleyecek dinleyicilerin yazılması.
+
+### Planda Sorguladığım Noktalar
+Oluşturulma esnasında ilk durum atandığında event tetiklenip tetiklenmeyeceğini sorguladım. Ajan, hem nesne yaratılışı (`init`) hem de durum güncellenişi (`set`) için iki farklı dinleyici yazmayı önerdi.
+
+### Üretilen Kodda Müdahale Ettiğim Yerler
+`RequestLog` tablosundaki `changed_by` sütunu için işlem yapan aktif kullanıcının ID bilgisinin (`current_user.id`) otomatik çekilmesi mantığını event listener içine ekledim.
+
+### Karşılaştığım Hata
+**Karşılaşılan Hata 1 (AttributeError)**: Durum ilk defa atanırken `NO_VALUE` sabitine erişmeye çalışırken `AttributeError: module 'sqlalchemy.event' has no attribute 'NO_VALUE'` hatası alındı.
+**Karşılaşılan Hata 2 (Mükerrer Kayıt)**: Talep oluşturulurken durum `pending` atandığında hem `init` hem `set` listener'ı tetiklendi ve mükerrer başlangıç logu atıldı.
+
+### Çözüm
+1. `NO_VALUE` import satırı `from sqlalchemy.orm.attributes import NO_VALUE` şeklinde düzeltildi.
+2. `set` dinleyicisine `if target.logs: return` kontrolü eklenerek `init` tarafından oluşturulan logun üzerine ikinci bir log atılması engellendi.
+
+### Öğrenilen Teknik Nokta
+SQLAlchemy event mekanizmalarında durum geçişlerinin `NO_VALUE` (henüz yüklenmemiş/atanmamış) durumundan geçerek başladığı ve bu durumun orm öznitelik seviyesinde ele alınması gerektiği öğrenildi.
+
+---
+
+## Oturum 3 [23/06/2026] [17:30 - 19:00]
+
+### Hedef
+Talep onaylama, reddetme, iptal etme, teslim etme ve stok düşme/iade iş kurallarının route'larda kodlanması.
+
+### Kullandığım AI Modeli ve Mod
+Gemini 1.5 Pro, Coding Modu.
+
+### Verdiğim Prompt
+"Talepler için onay (approve), ret (reject), teslim (deliver) ve iptal (cancel) rotalarını yaz. Rol yetkilerini, stok kontrollerini ve ret açıklaması zorunluluğunu kodla."
+
+### Ajanın Önerdiği Plan
+1. `app/blueprints/requests/routes.py` dosyasında gerekli HTTP POST rotalarının oluşturulması.
+2. Rol kontrolü için `check_manager_or_admin()` yardımcı fonksiyonunun tanımlanması.
+3. Stok miktarlarının düşülmesi ve iadesi işlemlerinin gerçekleştirilmesi.
+
+### Planda Sorguladığım Noktalar
+Onaylı bir talep iptal edildiğinde stokların ne olacağını sorguladım. Ajan, stokların geri envantere eklenmesi gerektiğini onayladı. Ayrıca normal kullanıcının başkasının talebini iptal etme denemesine 403 verilmesini plana ekledim.
+
+### Üretilen Kodda Müdahale Ettiğim Yerler
+Yazılan talep iptal kodunda normal kullanıcıların durum kontrolü eksikti. Kodda normal kullanıcının sadece kendi `pending` durumundaki talebini iptal edebileceğini, yetkili yöneticilerin ise onaylı talepleri de iptal edebileceğini belirten rol ve durum denetimlerini ekledim.
+
+### Karşılaştığım Hata
+Teslim edilmiş (`delivered`) taleplerin de iptal edilebildiği ve stokların mükerrer artırılabildiği bir mantıksal açık fark edildi.
+
+### Çözüm
+`/cancel` rotasına `if req.status == 'delivered':` kontrolü eklenerek teslim edilen taleplerin iptal edilmesi kesin olarak engellendi.
+
+### Öğrenilen Teknik Nokta
+Stok düşme işleminin onay aşamasında rezerve amaçlı yapılmasının, teslimat anındaki stok yetersizliklerini önlemek için en güvenli yöntem olduğu belirlendi.
+
+---
+
+## Oturum 4 [23/06/2026] [19:15 - 20:30]
+
+### Hedef
+Bootstrap 5 tabanlı arayüz şablonlarının kodlanması, arama, sayfalama ve JSON API katmanının kurulması.
+
+### Kullandığım AI Modeli ve Mod
+Gemini 1.5 Pro, Coding Modu.
+
+### Verdiğim Prompt
+"Sistemin arayüzü için Bootstrap 5 uyumlu base.html, dashboard.html ve envanter arama/pagination içeren inventory.html şablonlarını yaz. Ayrıca GET /api/v1/items ve GET /api/v1/requests/my API endpoint'lerini oluştur."
+
+### Ajanın Önerdiği Plan
+1. Template klasöründe kalıtım (inheritance) deseninin kurulması.
+2. Jinja2 döngüleri ve Bootstrap formlarıyla modal pencerelerin arayüze eklenmesi.
+3. API rotalarında model nesnelerinin sözlük (dict) yapılarına dönüştürülerek JSON formatında sunulması.
+
+### Planda Sorguladığım Noktalar
+Şablonlarda kullanılan model alan isimlerini sorguladım. Ajanın `stock_quantity` alanını kullandığı görüldü, ancak veritabanı modelinde bu alan `quantity` olarak tanımlanmıştı.
+
+### Üretilen Kodda Müdahale Ettiğim Yerler
+Arayüz şablonlarındaki ve API rotalarındaki tüm `stock_quantity` ifadelerini modelle uyumlu olacak şekilde `quantity` olarak güncelledim. Ayrıca API response çıktılarında hassas verileri tamamen temizledim.
+
+### Karşılaştığım Hata
+API çıktısında `password_hash` bilgisinin kazara dışarıya sızabileceği fark edildi.
+
+### Çözüm
+Manuel serileştirme (serialization) yapılarak sadece `id`, `name`, `category`, `quantity` gibi alanlar sözlüğe aktarıldı, şifre alanları elendi.
+
+### Öğrenilen Teknik Nokta
+Jinja2 şablonlarında kullanılan değişken isimlerinin ORM sınıf alan adlarıyla tam eşleşmesinin önemi ve API çıktılarında model nesnelerinin doğrudan serialize edilmesinin oluşturduğu güvenlik zafiyeti pekiştirildi.
+
+---
+
+## Oturum 5 [23/06/2026] [20:45 - 22:30]
+
+### Hedef
+Uygulamanın Dockerize edilmesi, migrations klasörünün hazırlanması ve pytest testlerinin yazılması.
+
+### Kullandığım AI Modeli ve Mod
+Gemini 1.5 Pro, Coding Modu.
+
+### Verdiğim Prompt
+"Dockerfile, docker-compose.yml, .env.example dosyalarını oluştur. tests/ klasörü altında çalışmak üzere en az 8 pytest testi yaz."
+
+### Ajanın Önerdiği Plan
+1. Python slim imajı kullanarak Dockerfile yazılması.
+2. SQLite veritabanı bağlantısı ve gizli anahtarı barındıran compose dosyasının kodlanması.
+3. pytest fixture'ları tanımlanarak testlerin yazılması.
+
+### Planda Sorguladığım Noktalar
+Testlerin izole koşulabilmesi için veritabanının her test öncesi sıfırlanması gerektiğini sorguladım. Ajan, pytest fixture'ında `db.create_all()` ve `db.drop_all()` kullanılmasını önerdi.
+
+### Üretilen Kodda Müdahale Ettiğim Yerler
+Testler sırasında Flask-Login oturumlarının context üzerinde cached kalıp diğer testleri etkilemesini önlemek amacıyla her test sonrasında oturumları temizleyecek mekanizmaları ekledim.
+
+### Karşılaştığım Hata
+**Karşılaşılan Hata 3 (Test Caching Hataları)**: Giriş yapmadan atılan isteklerin 200 dönmesi (bypass hatası).
+**Karşılaşılan Hata 4 (Oturum Kirliliği)**: Anonim isteklerin bir önceki testte giriş yapmış kullanıcı oturumuyla çalışması.
+
+### Çözüm
+1. `TestingConfig` sınıfında `LOGIN_DISABLED = False` yapılandırıldı.
+2. Test fixture'ına `/test_logout` rotası eklenerek testler arasında oturumların tamamen sıfırlanması sağlandı.
+
+### Öğrenilen Teknik Nokta
+Flask-Login entegrasyon testlerinde uygulama context'inin (application context) oturum önbellekleme (session caching) davranışı ve test izolasyonunun nasıl sağlanacağı öğrenildi.
+
+---
+
+## Eklenecek Kanıtlar (Evidences)
+
+### Ekran Görüntüsü Kanıtları
+1. **Dashboard Arayüzü**: `C:\Users\emir\.gemini\antigravity\scratch\inventory_request_system\docs\screenshots\dashboard.png` (Ana sayfa özet kartları ve kritik stok tablosu görsel kanıtı)
+2. **Envanter Listesi ve Talep Modal**: `C:\Users\emir\.gemini\antigravity\scratch\inventory_request_system\docs\screenshots\inventory.png` (Arama, sayfalama ve talep oluşturma butonu)
+3. **Talep Detay ve Onay Paneli**: `C:\Users\emir\.gemini\antigravity\scratch\inventory_request_system\docs\screenshots\request_details.png` (Talep logları, ret gerekçesi alanı ve onaylama butonu)
+4. **Admin Kullanıcı Yönetimi**: `C:\Users\emir\.gemini\antigravity\scratch\inventory_request_system\docs\screenshots\admin_users.png` (Kullanıcı listesi ve rol güncelleme menüsü)
+
+### Prompt-Yanıt Örneği 1
+*Geliştirici*: "Talebi onaylarken eğer miktar mevcut stoktan fazlaysa onayı engelle ve stoktan düş."
+*AI Asistanı*: "Bu iş kuralını gerçekleştirmek için `approve_request` rotasında talep miktarı (`req.quantity`) ile ürün stoğunu (`req.item.quantity`) karşılaştıralım. Eğer yetersizse HTTP 400 veya flash mesajı dönerek işlemi keselim. Başarılı ise stoğu düşelim."
+
+### Prompt-Yanıt Örneği 2
+*Geliştirici*: "Normal kullanıcı kendi talebi olmayan talebe erişmeye çalışırsa 403 Forbidden hatası fırlat."
+*AI Asistanı*: "`details` rotasında `if req.user_id != current_user.id and current_user.role not in ['admin', 'inventory_manager']:` denetimi ekleyerek yetkisiz kullanıcılar için `abort(403)` fırlatalım."
+
+### Yapay Zeka Hatası Yakalama ve Düzeltme Örneği
+Oturum 2'de ajanın yazdığı `@event.listens_for(InventoryRequest.status, 'set')` dinleyicisinde `event.NO_VALUE` kullanımı nedeniyle `AttributeError` hatası alındı. AI asistanına hatayı ilettiğimde hatanın farkına varıp kütüphane import yolunu `from sqlalchemy.orm.attributes import NO_VALUE` olarak güncelledi ve hata giderildi.
+
+### Mimari/Güvenlik Teknik Kararı Örneği
+API endpoint'lerinde model verilerini dışarıya sunarken `password_hash` alanının sızmasını önlemek amacıyla veritabanı nesnelerini doğrudan serialize etmek yerine, el yordamıyla sadece izin verilen alanları seçip (`id`, `name`, `category`, `quantity`) sözlüğe (dict) çevirerek döndürme kararı alınmıştır.
+
+# Teknik Proje Raporu: Flask ile Envanter ve Talep Takip Sistemi
+
+---
+
+## 1. Giriş ve Proje Özeti
+Bu proje, Gazi Üniversitesi - TUSAŞ Kazan Meslek Yüksekokulu Bütünleme Sınavı yönergesi kapsamında geliştirilmiş olan, bir kurumsal işletmedeki demirbaşların, sarf malzemelerinin ve teknik ekipmanların durumunu, bunlara ait personel taleplerini ve onay/red/teslimat süreçlerini uçtan uca yönetmeyi hedefleyen bir web uygulamasıdır. 
+
+Sistem, basit bir CRUD (Oluşturma, Okuma, Güncelleme, Silme) uygulamasının ötesine geçerek, rol tabanlı erişim denetimi (RBAC), her durum değişikliğini zaman damgası ve kullanıcı kimliğiyle birlikte denetleyen otomatik audit log mekanizması, karmaşık stok ve talep iş kuralları doğrulamaları, kapsamlı entegrasyon testleri ve Dockerize edilmiş dağıtım mimarisi sunmaktadır. Proje boyunca yapay zeka kodlama asistanı (AI Agent) aktif bir şekilde çiftler halinde programlama (pair programming) yaklaşımıyla kullanılmış, üretilen kodların iş mantığı, güvenlik ve kalite standartları insan gözetiminde doğrulanmıştır.
+
+---
+
+## 2. Sistem Mimarisi ve Teknoloji Yığıtı (Technology Stack)
+Uygulama, sürdürülebilir, modüler ve kolay genişletilebilir yazılım tasarımı ilkelerine bağlı kalınarak şu teknolojik bileşenlerle inşa edilmiştir:
+
+- **Çekirdek Çerçeve (Backend)**: Web sunucusu ve uygulama mantığı için Python tabanlı modern ve hafif **Flask 3.x** mikro web çerçevesi kullanılmıştır.
+- **Tasarım Deseni (Design Pattern)**: Uygulama başlatma süreçlerinde dairesel import (circular import) hatalarını önlemek ve farklı yapılandırma profillerini (development, testing, production) yönetebilmek amacıyla **Application Factory** deseni (`create_app`) uygulanmıştır.
+- **Modülerlik (Blueprints)**: Uygulama fonksiyonları mantıksal olarak 6 ayrı Blueprint yapısına bölünmüştür:
+  - `auth`: Kullanıcı kayıt, giriş ve çıkış işlemleri.
+  - `main`: Ana sayfa (dashboard) ve sistem genel özetleri.
+  - `inventory`: Envanter arama, listeleme, detay görüntüleme ve ürün ekleme.
+  - `requests`: Talep oluşturma, detaylandırma, onaylama, reddetme, teslim etme ve iptal etme.
+  - `admin`: Kullanıcı rolleri yönetimi ve tüm sistemin audit (RequestLog) günlüklerini izleme.
+  - `api`: JSON formatında veri sunan ve dış servislerle entegrasyon sağlayan RESTful endpoint'ler.
+- **Veritabanı Katmanı (ORM)**: SQLAlchemy 2.x ORM yapısı tercih edilmiştir. Modeller tip anotasyonları (`Mapped`, `mapped_column`) ile modern Python standartlarında yazılmış, veritabanı migration işlemleri için **Flask-Migrate** (Alembic) entegre edilmiştir. Yerel geliştirme ve testlerde dosya tabanlı **SQLite** veritabanı motoru kullanılmıştır.
+- **Güvenlik ve Oturum Yönetimi**: Oturum açma ve kimlik doğrulama işlemleri **Flask-Login** kütüphanesiyle yapılmıştır. Form tabanlı güvenlik ve Siteler Arası İstek Sahteciliği (CSRF) saldırılarına karşı koruma için **Flask-WTF** (`CSRFProtect`) global olarak aktif edilmiştir.
+- **Arayüz Tasarımı (Frontend)**: Tamamen mobil uyumlu (responsive) ve premium bir görünüm sunmak amacıyla **Bootstrap 5** kütüphanesi kullanılmıştır. Google Fonts üzerinden **Outfit** yazı tipi entegre edilerek modern bir tipografi elde edilmiş, Bootstrap Icons ile görsel zenginlik sağlanmıştır.
+
+---
+
+## 3. Veritabanı Modelleri ve İlişkisel Şema Tasarımı
+Sistemin veritabanı tasarımı, veri tekrarını önleyen ve ilişkisel bütünlüğü (referential integrity) koruyan 3. Normal Form (3NF) düzeyindedir. Sistemdeki modeller ve ilişkileri şu şekildedir:
+
+1. **User (Kullanıcılar)**: Sistem kullanıcılarının kimlik bilgilerini, rollerini (`user`, `inventory_manager`, `admin`) ve bağlı oldukları departman ilişkisini tutar. Şifreler kesinlikle veritabanında düz metin olarak saklanmaz, tek yönlü kriptografik hashing algoritmasıyla maskelenir.
+2. **Department (Departmanlar)**: Kullanıcıların kurumsal bağlılıklarını temsil eder. Bir departmana birden çok kullanıcı bağlı olabilir (One-to-Many).
+3. **Category (Kategoriler)**: Envanter kalemlerinin mantıksal gruplandırılmasını sağlar. Bir kategori altında birden çok ürün tanımlanabilir (One-to-Many).
+4. **InventoryItem (Envanter Kalemleri)**: Demirbaş ve sarf malzemelerinin adını, stok miktarını (`quantity`), kritik stok sınırını (`critical_stock_level`), depo/konum bilgisini (`location`) ve açıklamalarını saklar. `quantity <= critical_stock_level` olduğunda çalışan dinamik `is_critical` property'sine sahiptir.
+5. **InventoryRequest (Talepler)**: Kullanıcıların ürünlerden yaptığı taleplerin miktarını, zaman damgasını, kullanıcı notunu (`request_note`), yönetici notunu (`manager_note`) ve durum bilgisini (`status`: pending, approved, rejected, delivered, cancelled) tutar.
+6. **RequestLog (Audit Log / Günlük)**: Bir talebin durumu her değiştiğinde (örneğin `pending` -> `approved`), bu değişikliğin eski değerini, yeni değerini, gerekçesini ve işlemi yapan operatörün (`changed_by`) kimliğini otomatik olarak saklayan denetim modelidir.
+
+### Veritabanı İlişkileri Şeması:
+- `Department` -> `User`: One-to-Many ilişkisi (`users` / `department`).
+- `Category` -> `InventoryItem`: One-to-Many ilişkisi (`items` / `category`).
+- `User` -> `InventoryRequest`: One-to-Many ilişkisi (`requests` / `user`).
+- `InventoryItem` -> `InventoryRequest`: One-to-Many ilişkisi (`requests` / `item`).
+- `InventoryRequest` -> `RequestLog`: One-to-Many ilişkisi (`logs` / `request`).
+- `User` -> `RequestLog`: One-to-Many ilişkisi (`logs_changed` / `operator`).
+
+---
+
+## 4. Zorunlu İş Kuralları ve Teknik Gerçekleştirimleri
+Proje yönergesinde belirtilen tüm kritik iş kuralları kod seviyesinde tavizsiz bir şekilde uygulanmıştır:
+
+### 4.1. Talep Oluşturma Akışı:
+- Kullanıcıların talep oluşturabilmesi için öncelikle sisteme giriş yapmış olmaları gerekir (`@login_required`).
+- Talep edilecek miktar sıfır veya negatif (`quantity <= 0`) olamaz. Form doğrulamalarında bu durum engellenir ve HTTP 400 hatası/hata mesajı döndürülür.
+- Talep edilen miktar mevcut ürün stoğundan fazla olabilir; fakat bu durumda sistem kullanıcıyı `flash` mesajıyla uyarır ("Talep ettiğiniz miktar mevcut stoktan fazladır. Talebiniz onay beklemektedir.") ve talep yine de `pending` durumunda başarıyla veritabanına eklenir.
+
+### 4.2. Talep Onaylama Akışı:
+- Sadece `inventory_manager` veya `admin` rolündeki kullanıcılar talepleri onaylayabilir.
+- Onaylama işlemi sırasında talep edilen miktar ile ürünün güncel stoğu karşılaştırılır. Eğer talep miktarı mevcut stoktan fazlaysa onay işlemi kesinlikle engellenir ve kullanıcıya hata mesajı gösterilir.
+- Onay işlemi başarılı olduğunda talep durumu `approved` yapılır ve ürün stoğu talep miktarı kadar düşürülür. Stoktan düşme işleminin onay aşamasında yapılması tercih edilmiştir. Bu kararın nedeni, onaylanan malzemenin depo stoğunda rezerve edilmesini garanti altına almak ve aynı ürüne ait diğer bekleyen taleplerin mükerrer onaylanarak eksi stoğa düşmesini engellemektir.
+
+### 4.3. Talep Reddetme Akışı:
+- Sadece yetkili yöneticiler talebi reddedebilir.
+- Reddetme işlemi sırasında yönetici gerekçesini bildiren `manager_note` alanını doldurmak zorundadır. Boşluklardan oluşan veya boş bırakılan ret gerekçeleri reddedilir, veritabanına kayıt işlenmez.
+- Reddedilen taleplerin durumu `rejected` olarak güncellenir ve herhangi bir stok değişimi yapılmaz.
+
+### 4.4. Teslim Etme Akışı:
+- Sadece durum kodu `approved` (onaylanmış) olan talepler teslim edildi (`delivered`) durumuna geçirilebilir.
+- Beklemedeki (`pending`) veya reddedilmiş (`rejected`) durumdaki talepler doğrudan teslim edildi yapılamaz. Bu durum veri tutarlılığı açısından engellenmiştir.
+- Teslimatı tamamlanan talepler kilitlenir ve artık iptal edilemez.
+
+### 4.5. Talep İptal Akışı:
+- Normal kullanıcılar sadece kendi oluşturdukları talepleri iptal edebilirler. Başka bir kullanıcının talebini iptal etmeye çalışan kullanıcılara HTTP 403 Forbidden hatası fırlatılır.
+- Normal kullanıcılar sadece `pending` (beklemede) durumundaki taleplerini iptal edebilir. Onaylanmış veya teslim edilmiş taleplerini iptal etmelerine izin verilmez.
+- Yönetici veya admin rolündeki kullanıcılar ise `approved` durumundaki bir talebi iptal edebilir. Eğer onaylı bir talep iptal edilirse, onay sırasında düşülmüş olan stok miktarı envantere otomatik olarak geri iade edilir (`item.quantity += req.quantity`).
+
+---
+
+## 5. Otomatik Audit Loglama (Event Listeners)
+Talepler üzerindeki durum değişikliklerinin denetlenmesi ve kimin hangi işlemi yaptığının loglanması, geliştirici hatalarını ve kod kalabalığını önlemek amacıyla SQLAlchemy olay dinleyicileri (event listeners) ile otomatikleştirilmiştir:
+
+- **Nesne Yaratılışı (`init` event)**: Bir `InventoryRequest` nesnesi ilk defa programda instantiate edildiğinde (`@event.listens_for(InventoryRequest, 'init')`) tetiklenir ve talebin oluşturulduğuna dair ilk log kaydını (`pending`) `RequestLog` tablosuna yazar.
+- **Durum Güncellemesi (`set` event)**: `InventoryRequest.status` niteliği her değiştiğinde (`@event.listens_for(InventoryRequest.status, 'set')`) otomatik tetiklenir. Eski durum, yeni durum, yapılan işlemin açıklaması ve işlemi gerçekleştiren aktif kullanıcının ID'si (`current_user.id`) alınarak log kaydı oluşturulur.
+- **Mükerrerlik Önleme Mantığı**: Nesne ilk defa yaratılırken `status='pending'` ataması yapıldığında hem `init` hem de `set` olayları tetiklenmektedir. Bu durumun veritabanında mükerrer (iki adet) başlangıç logu oluşturmasını önlemek için `set` dinleyicisinde `oldvalue == NO_VALUE` durumunda eğer `target.logs` listesinde zaten bir kayıt varsa işlem sonlandırılarak mükerrer kayıt engellenmiştir.
+
+---
+
+## 6. Kalite Güvence ve Test Süreci
+Uygulamanın kararlılığı ve iş kurallarının doğruluğu, `tests/` dizini altında yer alan 9 adet kapsamlı **pytest** entegrasyon testiyle doğrulanmıştır:
+- **Kullanıcı Kayıt Testi**: Departman ilişkili kullanıcı eklemeyi doğrular.
+- **Şifre Hash Testi**: Şifrelerin açık metin saklanmadığını ve eşleşme mantığını test eder.
+- **Giriş ve Yetkisiz Erişim Testi**: Giriş yapmamış kullanıcıların korumalı route ve API endpoint'lerine erişemediğini doğrular.
+- **Ürün Oluşturma Testi**: Ürün ekleme yetkisini rol bazlı test eder.
+- **Talep Limit Testi**: `quantity <= 0` sınırını doğrular.
+- **Stok Kontrol Testi**: Stok yetersizse onayın engellendiğini denetler.
+- **Ret Doğrulama Testi**: Ret sırasında `manager_note` zorunluluğunu test eder.
+- **Sahiplik Kontrol Testi**: Normal kullanıcının başkasının talebini iptal edemediğini (HTTP 403) denetler.
+- **Log Testi**: Olay dinleyicilerinin durum geçişlerinde doğru log yazıp yazmadığını kontrol eder.
+
+Tüm testler izole bir SQLite in-memory veritabanında koşulmuş ve başarıyla tamamlanmıştır.
+
+---
+
+## 7. Sonuç
+Bu projede; Flask 3.x'in modern pratikleri, SQLAlchemy 2.x'in güvenli veri modelleri, katı iş kuralları, otomatik olay loglama mimarisi ve Docker Compose konteyner yapısı entegre edilerek kurumsal standartlarda, güvenli, denetlenebilir ve kararlı bir envanter ve talep yönetim platformu başarıyla tamamlanmıştır.
