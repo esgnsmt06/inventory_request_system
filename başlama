@@ -1,0 +1,1042 @@
+from flask import render_template, redirect, url_for, flash, request, abort
+from flask_login import login_required, current_user
+from app.blueprints.admin import admin_bp
+from app import db
+from app.models import User, RequestLog
+
+def check_admin():
+    """Giriş yapan kullanıcının admin olup olmadığını doğrular."""
+    if not current_user.is_authenticated or current_user.role != 'admin':
+        abort(403)
+
+@admin_bp.route('/')
+@admin_bp.route('/users')
+@login_required
+def users_list():Flask>=3.0.0
+Flask-SQLAlchemy>=3.1.0
+Flask-WTF>=1.2.0# Flask Ayarları
+FLASK_CONFIG=development
+SECRET_KEY=gizli-anahtari-buraya-yazin-123456789
+
+# Veritabanı Ayarları
+DEV_DATABASE_URL=sqlite:///dev_inventory.db
+DATABASE_URL=postgresql://user:password@localhost:5432/dbname
+
+Flask-Login>=0.6.3
+SQLAlchemy>=2.0.0
+pytest>=7.0.0
+python-dotenv>=1.0.0
+Flask-Migrate>=4.0.0
+email-validator>=2.0.0
+
+    check_admin()
+    users = db.session.scalars(db.select(User).order_by(User.username)).all()
+    return render_template('admin/users.html', users=users)
+
+@admin_bp.route('/users/<int:user_id>/update_role', methods=['POST'])
+@login_required
+def update_role(user_id):
+    check_admin()
+    user = db.session.get(User, user_id)
+    if not user:
+        flash("Kullanıcı bulunamadı.", "danger")
+        return redirect(url_for('admin.users_list'))
+    
+    # Kendi rolünü değiştirmeyi engelle
+    if user.id == current_user.id:
+        flash("Kendi rolünüzü değiştiremezsiniz.", "warning")
+        return redirect(url_for('admin.users_list'))
+        
+    new_role = request.form.get('role')
+    if new_role not in ['user', 'inventory_manager', 'admin']:
+        flash("Geçersiz rol seçimi.", "danger")
+        return redirect(url_for('admin.users_list'))
+        
+    user.role = new_role
+    db.session.commit()
+    flash(f"{user.username} kullanıcısının rolü {new_role.upper()} olarak güncellendi.", "success")
+    return redirect(url_for('admin.users_list'))
+
+@admin_bp.route('/audit')
+@login_required
+def audit_logs():
+    check_admin()
+    # İşlem geçmişini / Audit kayıtlarını son eklenen en üstte olacak şekilde getirir
+    logs = db.session.scalars(db.select(RequestLog).order_by(RequestLog.created_at.desc())).all()
+    return render_template('admin/audit.html', logs=logs)
+
+from flask import Blueprint
+
+admin_bp = Blueprint('admin', __name__)
+
+from app.blueprints.admin import routes
+
+
+from flask import jsonify, abort
+from flask_login import login_required, current_user
+from app.blueprints.api import api_bp
+from app import db
+from app.models import InventoryItem, InventoryRequest
+
+@api_bp.route('/v1/items', methods=['GET'])
+def get_items():
+    """
+    Tüm envanter kalemlerini JSON formatında döner.
+    """
+    items = db.session.scalars(db.select(InventoryItem)).all()
+    
+    serialized_items = []
+    for item in items:
+        serialized_items.append({
+            'id': item.id,
+            'name': item.name,
+            'category': item.category.name,
+            'quantity': item.quantity,
+            'critical_stock_level': item.critical_stock_level,
+            'status': 'critical' if item.is_critical else 'available'
+        })
+        
+    return jsonify(serialized_items)
+
+@api_bp.route('/v1/items/<int:item_id>', methods=['GET'])
+def get_item(item_id):
+    """
+    Belirli bir envanter kalemini JSON formatında döner.
+    """
+    item = db.session.get(InventoryItem, item_id)
+    if not item:
+        return jsonify({"error": "Ürün bulunamadı"}), 404
+        
+    return jsonify({
+        'id': item.id,
+        'name': item.name,
+        'category': item.category.name,
+        'quantity': item.quantity,
+        'critical_stock_level': item.critical_stock_level,
+        'status': 'critical' if item.is_critical else 'available'
+    })
+
+@api_bp.route('/v1/requests/my', methods=['GET'])
+@login_required
+def get_my_requests():
+    """
+    Giriş yapan kullanıcının kendi taleplerini JSON formatında döner.
+    Dışarıya KESİNLİKLE şifre hash'i sızdırmaz.
+    """
+    requests = db.session.scalars(
+        db.select(InventoryRequest).where(InventoryRequest.user_id == current_user.id)
+    ).all()
+    
+    serialized_requests = []
+    for req in requests:
+        serialized_requests.append({
+            'id': req.id,
+            'quantity': req.quantity,
+            'status': req.status,
+            'created_at': req.created_at.isoformat() if req.created_at else None,
+            'updated_at': req.updated_at.isoformat() if req.updated_at else None,
+            'item': {
+                'id': req.item.id,
+                'name': req.item.name,
+                'category': req.item.category.name
+            },
+            'user': {
+                'id': req.user.id,
+                'username': req.user.username,
+                'email': req.user.email
+            }
+        })
+        
+    return jsonify(serialized_requests)
+
+from flask import Blueprint
+
+api_bp = Blueprint('api', __name__)
+
+from . import routes
+
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SubmitField, SelectField
+from wtforms.validators import DataRequired, Email, Length, EqualTo, ValidationError
+from app.models import User
+
+class LoginForm(FlaskForm):
+    username = StringField('Kullanıcı Adı', validators=[DataRequired(message="Kullanıcı adı zorunludur.")])
+    password = PasswordField('Şifre', validators=[DataRequired(message="Şifre zorunludur.")])
+    submit = SubmitField('Giriş Yap')
+
+class RegisterForm(FlaskForm):
+    username = StringField('Kullanıcı Adı', validators=[
+        DataRequired(message="Kullanıcı adı zorunludur."),
+        Length(min=3, max=50, message="Kullanıcı adı 3 ile 50 karakter arasında olmalıdır.")
+    ])
+    email = StringField('E-posta', validators=[
+        DataRequired(message="E-posta adresi zorunludur."),
+        Email(message="Geçersiz e-posta adresi.")
+    ])
+    password = PasswordField('Şifre', validators=[
+        DataRequired(message="Şifre zorunludur."),
+        Length(min=6, message="Şifre en az 6 karakter olmalıdır.")
+    ])
+    confirm_password = PasswordField('Şifre Tekrar', validators=[
+        DataRequired(message="Şifre tekrarı zorunludur."),
+        EqualTo('password', message="Şifreler eşleşmiyor.")
+    ])
+    role = SelectField('Rol', choices=[
+        ('user', 'Normal Kullanıcı'),
+        ('inventory_manager', 'Envanter Sorumlusu'),
+        ('admin', 'Admin')
+    ], default='user')
+    department_id = SelectField('Departman', coerce=int, validators=[DataRequired()])
+    submit = SubmitField('Kayıt Ol')
+
+    def validate_username(self, username):
+        user = User.query.filter_by(username=username.data).first()
+        if user:
+            raise ValidationError('Bu kullanıcı adı zaten alınmış.')
+
+    def validate_email(self, email):
+        user = User.query.filter_by(email=email.data).first()
+        if user:
+            raise ValidationError('Bu e-posta adresi zaten kayıtlı.')
+
+from flask import render_template, redirect, url_for, flash, request
+from flask_login import login_user, logout_user, current_user, login_required
+from app.blueprints.auth import auth_bp
+from app import db
+from app.models import User, Department
+from app.blueprints.auth.forms import LoginForm, RegisterForm
+
+@auth_bp.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('main.index'))
+    
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = db.session.scalar(db.select(User).where(User.username == form.username.data))
+        if user and user.check_password(form.password.data):
+            login_user(user)
+            flash('Başarıyla giriş yapıldı.', 'success')
+            next_page = request.args.get('next')
+            return redirect(next_page) if next_page else redirect(url_for('main.index'))
+        else:
+            flash('Geçersiz kullanıcı adı veya şifre.', 'danger')
+            
+    return render_template('auth/login.html', form=form)
+
+@auth_bp.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('main.index'))
+        
+    form = RegisterForm()
+    
+    # Departmanları dinamik yükle. Eğer hiç departman yoksa, varsayılanları ekle.
+    departments = db.session.scalars(db.select(Department).order_by(Department.name)).all()
+    if not departments:
+        default_depts = [
+            Department(name="Bilgi İşlem", description="IT Departmanı"),
+            Department(name="İnsan Kaynakları", description="HR Departmanı"),
+            Department(name="Finans", description="Finans Departmanı"),
+            Department(name="Satın Alma", description="Satın Alma ve Lojistik")
+        ]
+        db.session.add_all(default_depts)
+        db.session.commit()
+        departments = db.session.scalars(db.select(Department).order_by(Department.name)).all()
+        
+    form.department_id.choices = [(d.id, d.name) for d in departments]
+    
+    if form.validate_on_submit():
+        user = User(
+            username=form.username.data,
+            email=form.email.data,
+            role=form.role.data,
+            department_id=form.department_id.data
+        )
+        user.set_password(form.password.data)
+        db.session.add(user)
+        db.session.commit()
+        flash('Kaydınız başarıyla tamamlandı. Şimdi giriş yapabilirsiniz.', 'success')
+        return redirect(url_for('auth.login'))
+        
+    return render_template('auth/register.html', form=form)
+
+@auth_bp.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    flash('Başarıyla çıkış yapıldı.', 'success')
+    return redirect(url_for('auth.login'))
+
+from flask import Blueprint
+
+auth_bp = Blueprint('auth', __name__)
+
+from app.blueprints.auth import routes
+
+
+from flask import render_template, redirect, url_for, flash, request, abort
+from flask_login import login_required, current_user
+from app.blueprints.inventory import inventory_bp
+from app import db
+from app.models import InventoryItem, Category
+
+def check_manager_or_admin():
+    """Giriş yapan kullanıcının yetkisini kontrol eder."""
+    if not current_user.is_authenticated or current_user.role not in ['admin', 'inventory_manager']:
+        abort(403)  # Yetkisiz erişim durumunda HTTP 403 Forbidden fırlatır
+
+@inventory_bp.route('/')
+@login_required
+def index():
+    """Arama ve sayfalama destekli olarak envanter listesini şablon üzerinde gösterir."""
+    page = request.args.get('page', 1, type=int)
+    search_query = request.args.get('q', '', type=str).strip()
+    per_page = 5  # Sayfa başına ürün adedi
+    
+    # Arama kriterini SQL sorgusuna ekle
+    stmt = db.select(InventoryItem)
+    if search_query:
+        stmt = stmt.where(
+            InventoryItem.name.contains(search_query) | 
+            InventoryItem.description.contains(search_query)
+        )
+        
+    # Toplam eleman ve sayfa sayısını hesaplama
+    total_items = db.session.scalar(db.select(db.func.count()).select_from(stmt.subquery())) or 0
+    pages = max(1, (total_items + per_page - 1) // per_page)
+    
+    # Sayfa sınırlarına göre ürünleri çek
+    items = db.session.scalars(
+        stmt.order_by(InventoryItem.name).offset((page - 1) * per_page).limit(per_page)
+    ).all()
+    
+    # Yeni ürün modalındaki kategori dropdown listesi için tüm kategorileri çek
+    categories = db.session.scalars(db.select(Category).order_by(Category.name)).all()
+    
+    return render_template(
+        'inventory.html',
+        items=items,
+        page=page,
+        pages=pages,
+        search_query=search_query,
+        categories=categories
+    )
+
+@inventory_bp.route('/<int:item_id>')
+@login_required
+def details(item_id):
+    """Belirli bir envanter kaleminin detaylarını gösterir."""
+    item = db.session.get(InventoryItem, item_id)
+    if not item:
+        abort(404)
+    return f"Item Details: Name={item.name}, Stock={item.quantity}, Category={item.category.name}, IsCritical={item.is_critical}, Location={item.location}"
+
+@inventory_bp.route('/add', methods=['POST'])
+@login_required
+def add_item():
+    """
+    Yeni envanter kalemi ekler (Yalnızca admin veya inventory_manager).
+    Formlarda CSRF koruması Flask-WTF ile otomatik olarak aktiftir.
+    """
+    check_manager_or_admin()
+    
+    name = request.form.get('name')
+    category_id = request.form.get('category_id')
+    quantity = request.form.get('quantity', type=int, default=0)
+    critical_stock_level = request.form.get('critical_stock_level', type=int, default=5)
+    location = request.form.get('location')
+    description = request.form.get('description')
+    
+    if not name or not category_id:
+        return "Hata: Ürün adı ve kategori ID zorunludur.", 400
+        
+    category = db.session.get(Category, category_id)
+    if not category:
+        return "Hata: Geçersiz kategori ID.", 400
+        
+    new_item = InventoryItem(
+        name=name,
+        category=category,
+        quantity=quantity,
+        critical_stock_level=critical_stock_level,
+        location=location,
+        description=description
+    )
+    db.session.add(new_item)
+    db.session.commit()
+    
+    flash(f"Başarılı: Envanter kalemi '{new_item.name}' eklendi.", "success")
+    return redirect(url_for('inventory.index'))
+
+@inventory_bp.route('/categories', methods=['GET', 'POST'])
+@login_required
+def manage_categories():
+    """Kategorileri listeler ve yeni kategori eklenmesini sağlar (Yalnızca admin/manager)."""
+    check_manager_or_admin()
+    
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        description = request.form.get('description', '').strip()
+        
+        if not name:
+            flash("Hata: Kategori adı boş olamaz.", "danger")
+            return redirect(url_for('inventory.manage_categories'))
+            
+        # Mükerrer kontrolü
+        existing_cat = db.session.scalar(db.select(Category).where(Category.name == name))
+        if existing_cat:
+            flash(f"Hata: '{name}' adında bir kategori zaten mevcut.", "danger")
+            return redirect(url_for('inventory.manage_categories'))
+            
+        new_cat = Category(name=name, description=description)
+        db.session.add(new_cat)
+        db.session.commit()
+        
+        flash(f"Başarılı: '{name}' kategorisi eklendi.", "success")
+        return redirect(url_for('inventory.manage_categories'))
+        
+    categories = db.session.scalars(db.select(Category).order_by(Category.name)).all()
+    return render_template('inventory/categories.html', categories=categories)
+
+@inventory_bp.route('/categories/<int:category_id>/delete', methods=['POST'])
+@login_required
+def delete_category(category_id):
+    """Kategoriyi siler (Eğer kategoriye bağlı ürün yoksa)."""
+    check_manager_or_admin()
+    
+    category = db.session.get(Category, category_id)
+    if not category:
+        abort(404)
+        
+    # Eğer kategoriye bağlı ürün varsa silmeyi engelle
+    if len(category.items) > 0:
+        flash("Hata: Bu kategoriye bağlı envanter ürünleri bulunduğu için silinemez.", "danger")
+        return redirect(url_for('inventory.manage_categories'))
+        
+    db.session.delete(category)
+    db.session.commit()
+    
+    flash(f"Başarılı: '{category.name}' kategorisi silindi.", "success")
+    return redirect(url_for('inventory.manage_categories'))
+
+
+from flask import Blueprint
+
+inventory_bp = Blueprint('inventory', __name__)
+
+from . import routes
+
+from flask import render_template
+from flask_login import login_required
+from app import db
+from app.models import InventoryItem, InventoryRequest
+from app.blueprints.main import main_bp
+
+@main_bp.route('/')
+@login_required
+def index():
+    """Ana sayfa (Dashboard) için envanter özet verilerini çekip şablonu render eder."""
+    total_items = db.session.scalar(db.select(db.func.count(InventoryItem.id))) or 0
+    total_requests = db.session.scalar(db.select(db.func.count(InventoryRequest.id))) or 0
+    
+    # Kritik stok seviyesindeki ürünler (quantity <= critical_stock_level)
+    critical_items = db.session.scalars(
+        db.select(InventoryItem).where(InventoryItem.quantity <= InventoryItem.critical_stock_level)
+    ).all()
+    critical_items_count = len(critical_items)
+    
+    # Bekleyen talepler
+    pending_requests_count = db.session.scalar(
+        db.select(db.func.count(InventoryRequest.id)).where(InventoryRequest.status == 'pending')
+    ) or 0
+    
+    return render_template(
+        'dashboard.html',
+        total_items=total_items,
+        total_requests=total_requests,
+        critical_items_count=critical_items_count,
+        pending_requests_count=pending_requests_count,
+        critical_items=critical_items
+    )
+
+from flask import Blueprint
+
+main_bp = Blueprint('main', __name__)
+
+from . import routes
+
+from flask import render_template, redirect, url_for, flash, request, abort
+from flask_login import login_required, current_user
+from app.blueprints.requests import requests_bp
+from app import db
+from app.models import InventoryRequest, InventoryItem, RequestLog
+
+def check_manager_or_admin():
+    """Giriş yapan kullanıcının yetkisini kontrol eder."""
+    if not current_user.is_authenticated or current_user.role not in ['admin', 'inventory_manager']:
+        abort(403)  # Yetkisiz erişim durumunda HTTP 403 Forbidden fırlatır
+
+@requests_bp.route('/')
+@login_required
+def index():
+    """
+    Talepleri listeler.
+    Admin ve yöneticiler tüm talepleri görebilir, 
+    normal kullanıcılar yalnızca kendi taleplerini görebilir.
+    """
+    page = request.args.get('page', 1, type=int)
+    status_filter = request.args.get('status', '', type=str)
+    per_page = 10
+    
+    # Rol kontrolüne göre sorgu oluştur
+    if current_user.role in ['admin', 'inventory_manager']:
+        stmt = db.select(InventoryRequest)
+    else:
+        stmt = db.select(InventoryRequest).where(InventoryRequest.user_id == current_user.id)
+        
+    if status_filter:
+        stmt = stmt.where(InventoryRequest.status == status_filter)
+        
+    # Tarihe göre tersten sırala (en yeni en üstte)
+    stmt = stmt.order_by(InventoryRequest.created_at.desc())
+    
+    # Pagination
+    total_requests = db.session.scalar(db.select(db.func.count()).select_from(stmt.subquery())) or 0
+    pages = max(1, (total_requests + per_page - 1) // per_page)
+    
+    requests_list = db.session.scalars(
+        stmt.offset((page - 1) * per_page).limit(per_page)
+    ).all()
+        
+    return render_template(
+        'requests/index.html',
+        requests=requests_list,
+        page=page,
+        pages=pages,
+        status_filter=status_filter
+    )
+
+@requests_bp.route('/<int:request_id>')
+@login_required
+def details(request_id):
+    """
+    Belirli bir talebin detaylarını gösterir.
+    Kullanıcı kendi talebi olmayan bir talebe erişmeye çalışırsa 403 döner.
+    """
+    req = db.session.get(InventoryRequest, request_id)
+    if not req:
+        abort(404)
+        
+    # Güvenlik Kuralı: Normal kullanıcı başkasının talebine erişirse 403 döner
+    if req.user_id != current_user.id and current_user.role not in ['admin', 'inventory_manager']:
+        abort(403)
+        
+    return render_template('requests/details.html', req=req)
+
+@requests_bp.route('/create', methods=['GET', 'POST'])
+@login_required
+def create_request():
+    """
+    Yeni bir envanter talebi oluşturur.
+    İş Kuralı: Talep miktarı <= 0 olamaz.
+    İş Kuralı: Talep miktarı mevcut stoktan fazla olabilir; ancak sistem kullanıcıyı uyarmalıdır.
+    """
+    if request.method == 'POST':
+        item_id = request.form.get('item_id', type=int)
+        quantity = request.form.get('quantity', type=int)
+        request_note = request.form.get('request_note', '')
+        
+        if not item_id or quantity is None:
+            flash("Hata: Ürün ve miktar alanları zorunludur.", "danger")
+            return redirect(url_for('inventory.index'))
+            
+        # İş Kuralı: Talep miktarı <= 0 olamaz
+        if quantity <= 0:
+            flash("Hata: Talep miktarı 0 veya daha küçük olamaz.", "danger")
+            return redirect(url_for('inventory.details', item_id=item_id))
+            
+        item = db.session.get(InventoryItem, item_id)
+        if not item:
+            flash("Hata: Geçersiz ürün seçimi.", "danger")
+            return redirect(url_for('inventory.index'))
+            
+        # İş Kuralı: Talep miktarı mevcut stoktan fazla olabilir; ancak sistem kullanıcıyı uyarmalıdır.
+        if quantity > item.quantity:
+            flash("Uyarı: Talep ettiğiniz miktar mevcut stoktan fazladır. Talebiniz onay beklemektedir.", "warning")
+            
+        # Yeni talebin oluşturulması
+        new_request = InventoryRequest(
+            user=current_user,
+            item=item,
+            quantity=quantity,
+            request_note=request_note,
+            status='pending'
+        )
+        
+        db.session.add(new_request)
+        db.session.commit()
+        
+        flash(f"Talep başarıyla oluşturuldu: {item.name} ({quantity} adet).", "success")
+        return redirect(url_for('requests.index'))
+        
+    # GET isteğinde doğrudan ürün listesiyle form göster
+    items = db.session.scalars(db.select(InventoryItem).order_by(InventoryItem.name)).all()
+    selected_item_id = request.args.get('item_id', type=int)
+    return render_template('requests/create.html', items=items, selected_item_id=selected_item_id)
+
+@requests_bp.route('/<int:request_id>/approve', methods=['POST'])
+@login_required
+def approve_request(request_id):
+    """
+    Talebi onaylar (Yalnızca admin ve inventory_manager).
+    İş Kuralı: Stok yetersizse onay engellenmeli.
+    """
+    check_manager_or_admin()
+    
+    req = db.session.get(InventoryRequest, request_id)
+    if not req:
+        abort(404)
+        
+    if req.status != 'pending':
+        flash(f"Hata: Yalnızca beklemede (pending) olan talepler onaylanabilir. Mevcut durum: {req.status}", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    # İş Kuralı: Stok yetersizse onay engellenmeli
+    if req.quantity > req.item.quantity:
+        flash(f"Hata: Yetersiz stok! Talep edilen: {req.quantity}, Mevcut Stok: {req.item.quantity}", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    # Stok azaltılması ve durumun güncellenmesi
+    req.item.quantity -= req.quantity
+    req._status_change_notes = f"Talep onaylandı. Stoktan {req.quantity} adet düşüldü. İşlemi yapan: {current_user.username} ({current_user.role})"
+    req.status = 'approved'
+    
+    db.session.commit()
+    
+    flash(f"Talep #{req.id} onaylandı. Envanter stoğu güncellendi.", "success")
+    return redirect(url_for('requests.details', request_id=request_id))
+
+@requests_bp.route('/<int:request_id>/reject', methods=['POST'])
+@login_required
+def reject_request(request_id):
+    """
+    Talebi reddeder (Yalnızca admin ve inventory_manager).
+    İş Kuralı: Reddetmede manager_note alanı zorunlu olmalıdır.
+    """
+    check_manager_or_admin()
+    
+    req = db.session.get(InventoryRequest, request_id)
+    if not req:
+        abort(404)
+        
+    if req.status != 'pending':
+        flash(f"Hata: Yalnızca beklemede (pending) olan talepler reddedilebilir. Mevcut durum: {req.status}", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    manager_note = request.form.get('manager_note')
+    
+    # İş Kuralı: Reddetmede manager_note zorunlu olmalıdır
+    if not manager_note or not manager_note.strip():
+        flash("Hata: Talep reddedilirken ret gerekçesi (Yönetici Notu) belirtilmesi zorunludur.", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    req.manager_note = manager_note.strip()
+    req._status_change_notes = f"Talep reddedildi. Ret Nedeni: {manager_note.strip()} - İşlemi yapan: {current_user.username}"
+    req.status = 'rejected'
+    
+    db.session.commit()
+    
+    flash(f"Talep #{req.id} reddedildi.", "warning")
+    return redirect(url_for('requests.details', request_id=request_id))
+
+@requests_bp.route('/<int:request_id>/deliver', methods=['POST'])
+@login_required
+def deliver_request(request_id):
+    """
+    Talebi teslim edildi olarak işaretler (Yalnızca admin ve inventory_manager).
+    İş Kuralı: Sadece onaylanmış (approved) talepler delivered yapılabilir.
+    """
+    check_manager_or_admin()
+    
+    req = db.session.get(InventoryRequest, request_id)
+    if not req:
+        abort(404)
+        
+    if req.status != 'approved':
+        flash(f"Hata: Yalnızca onaylanmış (approved) talepler teslim edilebilir. Mevcut durum: {req.status}", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    req._status_change_notes = f"Talep teslim edildi olarak işaretlendi. İşlemi yapan: {current_user.username}"
+    req.status = 'delivered'
+    
+    db.session.commit()
+    
+    flash(f"Talep #{req.id} teslim edildi olarak işaretlendi.", "success")
+    return redirect(url_for('requests.details', request_id=request_id))
+
+@requests_bp.route('/<int:request_id>/cancel', methods=['POST'])
+@login_required
+def cancel_request(request_id):
+    """
+    Talebi iptal eder.
+    İş Kuralı: Normal kullanıcı sadece pending durumundaki kendi talebini iptal edebilir, 
+    başkasınınkine erişirse 403 hatası dönmelidir.
+    İş Kuralı: Teslim edilen (delivered) talepler kullanıcı tarafından iptal edilemez.
+    """
+    req = db.session.get(InventoryRequest, request_id)
+    if not req:
+        abort(404)
+        
+    is_manager_or_admin = current_user.role in ['admin', 'inventory_manager']
+    
+    # İş Kuralı: Normal kullanıcı başkasının talebine erişirse veya işlem yaparsa 403 döner
+    if not is_manager_or_admin and req.user_id != current_user.id:
+        abort(403)
+        
+    # İş Kuralı: Teslim edilen talepler KESİNLİKLE iptal edilemez
+    if req.status == 'delivered':
+        flash("Hata: Teslim edilmiş talepler iptal edilemez.", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    # İş Kuralı: Normal kullanıcı sadece pending durumundaki talebini iptal edebilir
+    if not is_manager_or_admin and req.status != 'pending':
+        flash(f"Hata: Normal kullanıcılar yalnızca beklemede (pending) olan taleplerini iptal edebilir. Mevcut durum: {req.status}", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    # Yönetici/Admin için sınır: Zaten iptal edilmiş veya reddedilmiş talepler iptal edilemez
+    if is_manager_or_admin and req.status in ['cancelled', 'rejected']:
+        flash(f"Hata: Zaten {req.status} durumundaki talepler iptal edilemez.", "danger")
+        return redirect(url_for('requests.details', request_id=request_id))
+        
+    # Eğer onaylı bir talep iptal ediliyorsa stoğu geri iade et
+    if req.status == 'approved':
+        req.item.quantity += req.quantity
+        req._status_change_notes = f"Onaylı talep iptal edildi. {req.quantity} adet stok envantere geri iade edildi. İşlemi yapan: {current_user.username}"
+    else:
+        req._status_change_notes = f"Talep iptal edildi. İşlemi yapan: {current_user.username}"
+        
+    req.status = 'cancelled'
+    db.session.commit()
+    
+    flash(f"Talep #{req.id} iptal edildi.", "info")
+    return redirect(url_for('requests.details', request_id=request_id))
+
+from flask import Blueprint
+
+requests_bp = Blueprint('requests', __name__)
+
+from . import routes
+
+from datetime import datetime
+from sqlalchemy import String, Integer, ForeignKey, Text, DateTime, Boolean, event
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from flask_login import UserMixin, current_user
+from sqlalchemy.orm.attributes import NO_VALUE
+from werkzeug.security import generate_password_hash, check_password_hash
+from app import db
+
+class Department(db.Model):
+    """
+    Departmanları temsil eden model.
+    Kullanıcılar bir departmana bağlıdır.
+    """
+    __tablename__ = 'departments'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # İlişkiler: Bir departmanda birden çok kullanıcı olabilir
+    users: Mapped[list['User']] = relationship('User', back_populates='department')
+
+    def __repr__(self) -> str:
+        return f"<Department {self.name}>"
+
+
+class User(db.Model, UserMixin):
+    """
+    Sistem kullanıcılarını temsil eden model.
+    """
+    __tablename__ = 'users'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), default='user')  # user, inventory_manager, admin
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Departman ilişkisi (Foreign Key)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey('departments.id'), nullable=True)
+
+    # İlişkiler
+    department: Mapped['Department'] = relationship('Department', back_populates='users')
+    requests: Mapped[list['InventoryRequest']] = relationship('InventoryRequest', back_populates='user')
+    logs_changed: Mapped[list['RequestLog']] = relationship('RequestLog', back_populates='operator')
+
+    # Şifre Yönetimi ve Hash'leme İş Kuralları
+    def set_password(self, password: str) -> None:
+        """Gelen açık şifreyi güvenli bir şekilde hash'leyerek kaydeder."""
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password: str) -> bool:
+        """Girilen şifrenin hash karşılığını veritabanındakiyle karşılaştırır."""
+        return check_password_hash(self.password_hash, password)
+
+    def __repr__(self) -> str:
+        return f"<User {self.username} (Role: {self.role})>"
+
+
+class Category(db.Model):
+    """
+    Envanter kalemlerinin kategorilerini temsil eden model.
+    """
+    __tablename__ = 'categories'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # İlişkiler: Bir kategoride birden çok envanter kalemi olabilir
+    items: Mapped[list['InventoryItem']] = relationship('InventoryItem', back_populates='category')
+
+    def __repr__(self) -> str:
+        return f"<Category {self.name}>"
+
+
+class InventoryItem(db.Model):
+    """
+    Sistemdeki envanter kalemlerini temsil eden model.
+    """
+    __tablename__ = 'inventory_items'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0) # Miktar negatif olamaz kuralı
+    critical_stock_level: Mapped[int] = mapped_column(Integer, default=5)
+    location: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Kategori ilişkisi (Foreign Key)
+    category_id: Mapped[int] = mapped_column(ForeignKey('categories.id'), nullable=False)
+
+    # İlişkiler
+    category: Mapped['Category'] = relationship('Category', back_populates='items')
+    requests: Mapped[list['InventoryRequest']] = relationship('InventoryRequest', back_populates='item')
+
+    # İş Kuralı: Kritik stok seviyesi mantığı (quantity <= critical_stock_level)
+    @property
+    def is_critical(self) -> bool:
+        """Stok miktarının kritik limitin altında veya limit değerinde olup olmadığını denetler."""
+        return self.quantity <= self.critical_stock_level
+
+    def __repr__(self) -> str:
+        return f"<InventoryItem {self.name} (Qty: {self.quantity}/{self.critical_stock_level})>"
+
+
+class InventoryRequest(db.Model):
+    """
+    Kullanıcıların envanter taleplerini temsil eden model.
+    """
+    __tablename__ = 'inventory_requests'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default='pending')  # pending, approved, rejected, delivered, cancelled
+    request_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    manager_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # İlişkiler için Foreign Key'ler
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False)
+    item_id: Mapped[int] = mapped_column(ForeignKey('inventory_items.id'), nullable=False)
+
+    # İlişkiler
+    user: Mapped['User'] = relationship('User', back_populates='requests')
+    item: Mapped['InventoryItem'] = relationship('InventoryItem', back_populates='requests')
+    logs: Mapped[list['RequestLog']] = relationship(
+        'RequestLog', 
+        back_populates='request', 
+        cascade='all, delete-orphan'
+    )
+
+    def __repr__(self) -> str:
+        return f"<InventoryRequest {self.id} - User: {self.user_id} - Item: {self.item_id} - Qty: {self.quantity} - Status: {self.status}>"
+
+
+class RequestLog(db.Model):
+    """
+    Taleplerin durum değişikliklerini loglayan audit model.
+    """
+    __tablename__ = 'request_logs'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    old_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    new_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # İlişkiler için Foreign Key'ler
+    request_id: Mapped[int] = mapped_column(ForeignKey('inventory_requests.id'), nullable=False)
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
+
+    # İlişkiler
+    request: Mapped['InventoryRequest'] = relationship('InventoryRequest', back_populates='logs')
+    operator: Mapped['User'] = relationship('User', back_populates='logs_changed')
+
+    def __repr__(self) -> str:
+        return f"<RequestLog id={self.id} req_id={self.request_id} {self.old_status} -> {self.new_status}>"
+
+
+# ==========================================
+# Otomatik Loglama Tetikleyicileri (Event Listeners)
+# ==========================================
+@event.listens_for(InventoryRequest.status, 'set')
+def auto_log_request_status_change(target: InventoryRequest, value: str, oldvalue: str, initiator) -> None:
+    """
+    SQLAlchemy Event Listener: InventoryRequest modelinin 'status' niteliği her değiştiğinde tetiklenir.
+    Eski ve yeni durumları karşılaştırarak otomatik olarak bir RequestLog kaydı oluşturur.
+    """
+    if oldvalue == value:
+        return
+
+    custom_notes = getattr(target, '_status_change_notes', None)
+
+    if oldvalue == NO_VALUE:
+        # Eğer zaten yaratılış logu init listener tarafından oluşturulduysa, mükerrer kaydı engelle
+        if target.logs:
+            return
+        old_status_str = None
+        log_notes = custom_notes or f"Talep oluşturuldu. İlk durum: '{value}' olarak belirlendi."
+    else:
+        old_status_str = oldvalue
+        log_notes = custom_notes or f"Talep durumu '{oldvalue}' değerinden '{value}' değerine güncellendi."
+
+    # İşlemi yapan kullanıcıyı g context veya target attribute üzerinden çekiyoruz
+    operator_id = getattr(target, '_changed_by', None)
+    if not operator_id and current_user and current_user.is_authenticated:
+        operator_id = current_user.id
+
+    log_entry = RequestLog(
+        old_status=old_status_str,
+        new_status=value,
+        note=log_notes,
+        changed_by=operator_id
+    )
+    target.logs.append(log_entry)
+
+
+@event.listens_for(InventoryRequest, 'init')
+def auto_log_request_creation(target: InventoryRequest, args, kwargs) -> None:
+    """
+    SQLAlchemy Event Listener: InventoryRequest nesnesi Python'da yaratıldığında (init) tetiklenir.
+    Talep oluşturulduğunda başlangıç durumunu otomatik olarak loglar.
+    """
+    initial_status = kwargs.get('status', 'pending')
+    custom_notes = kwargs.get('_status_change_notes', None)
+    
+    operator_id = kwargs.get('changed_by', None)
+    if not operator_id and current_user and current_user.is_authenticated:
+        operator_id = current_user.id
+        
+    log_entry = RequestLog(
+        old_status=None,
+        new_status=initial_status,
+        note=custom_notes or f"Talep oluşturuldu. İlk durum: '{initial_status}' olarak belirlendi.",
+        changed_by=operator_id
+    )
+    target.logs.append(log_entry)
+
+{% extends "base.html" %}
+
+{% block title %}İşlem Geçmişi (Audit Logs) - Admin Panel{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-journal-text me-2 text-warning"></i>İşlem Geçmişi (Audit Logs)</h2>
+    <div>
+        <a href="{{ url_for('admin.users_list') }}" class="btn btn-outline-primary">
+            <i class="bi bi-people-fill me-1"></i> Kullanıcı Yönetimi
+        </a>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Zaman</th>
+                        <th>Talep ID</th>
+                        <th>Değişikliği Yapan</th>
+                        <th>Eski Durum</th>
+                        <th>Yeni Durum</th>
+                        <th class="pe-4">Detay / Not</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td class="ps-4 text-muted small">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>
+                            <a href="{{ url_for('requests.details', request_id=log.request_id) }}" class="badge bg-secondary text-decoration-none">
+                                Talep #{{ log.request_id }}
+                            </a>
+                        </td>
+                        <td>
+                            {% if log.operator %}
+                                <strong>{{ log.operator.username }}</strong>
+                                <span class="badge bg-light text-dark border small">{{ log.operator.role|upper }}</span>
+                            {% else %}
+                                <span class="text-muted small">Sistem</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if log.old_status %}
+                                {% if log.old_status == 'pending' %}
+                                    <span class="badge bg-warning text-dark">Beklemede</span>
+                                {% elif log.old_status == 'approved' %}
+                                    <span class="badge bg-success">Onaylandı</span>
+                                {% elif log.old_status == 'rejected' %}
+                                    <span class="badge bg-danger">Reddedildi</span>
+                                {% elif log.old_status == 'delivered' %}
+                                    <span class="badge bg-info text-dark">Teslim Edildi</span>
+                                {% elif log.old_status == 'cancelled' %}
+                                    <span class="badge bg-secondary">İptal Edildi</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if log.new_status == 'pending' %}
+                                <span class="badge bg-warning text-dark">Beklemede</span>
+                            {% elif log.new_status == 'approved' %}
+                                <span class="badge bg-success">Onaylandı</span>
+                            {% elif log.new_status == 'rejected' %}
+                                <span class="badge bg-danger">Reddedildi</span>
+                            {% elif log.new_status == 'delivered' %}
+                                <span class="badge bg-info text-dark">Teslim Edildi</span>
+                            {% elif log.new_status == 'cancelled' %}
+                                <span class="badge bg-secondary">İptal Edildi</span>
+                            {% endif %}
+                        </td>
+                        <td class="pe-4 text-muted small">{{ log.note or '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center py-4 text-muted">Henüz kayıtlı bir audit logu bulunmamaktadır.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
