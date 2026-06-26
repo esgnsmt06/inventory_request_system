@@ -1,0 +1,315 @@
+import pytest
+from app import create_app, db
+from app.models import User, Department, Category, InventoryItem, InventoryRequest, RequestLog
+
+@pytest.fixture
+def app():
+    """Testler için Flask uygulama örneğini oluşturur ve veritabanını izole eder."""
+    app = create_app('testing')
+    app.config['LOGIN_DISABLED'] = False
+    
+    # Oturum açma ve kapatma işlemlerini test edebilmek için geçici test rotaları tanımlıyoruz
+    @app.route('/test_login/<username>')
+    def test_login(username):
+        user = db.session.scalar(db.select(User).where(User.username == username))
+        if user:
+            from flask_login import login_user
+            login_user(user)
+            return 'ok'
+        return 'no', 404version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: inventory_app
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+    environment:
+      - FLASK_CONFIG=development
+      - SECRET_KEY=dev-secret-key-987654321
+      - DEV_DATABASE_URL=sqlite:///dev_inventory.db
+    env_file:
+      - .env
+    restart: always
+
+
+    @app.route('/test_logout')
+    def test_logout():
+        from flask_login import logout_user
+        logout_user()
+        return 'logged out'
+
+    with app.app_context():
+        # Her test fonksiyonundan önce tabloları sıfırdan oluşturur
+        db.create_all()
+        yield app
+        # Test fonksiyonu bittikten sonra tabloları siler (izolasyon sağlar)
+        db.session.remove()
+        db.drop_all()
+
+@pytest.fixture
+def client(app):
+    """Test istemcisini (test client) döner."""
+    return app.test_client()
+
+import pytest
+from app import db
+from app.models import User, Department, Category, InventoryItem, InventoryRequest, RequestLog
+
+def setup_test_data():
+    """Yardımcı fonksiyon: Testlerin ortak kullanabileceği temel verileri oluşturur."""
+    it_dept = Department(name="IT")
+    db.session.add(it_dept)
+    
+    emp1 = User(username="ahmet", email="ahmet@sirket.com", role="user", department=it_dept)
+    emp1.set_password("sifre123")
+    db.session.add(emp1)
+    
+    emp2 = User(username="mehmet", email="mehmet@sirket.com", role="user", department=it_dept)
+    emp2.set_password("sifre123")
+    db.session.add(emp2)
+    
+    manager = User(username="selin", email="selin@sirket.com", role="inventory_manager", department=it_dept)
+    manager.set_password("sifre123")
+    db.session.add(manager)
+    
+    cat = Category(name="Elektronik")
+    db.session.add(cat)
+    
+    # 5 adet stoklu ürün
+    item = InventoryItem(name="Kablosuz Mouse", quantity=5, critical_stock_level=2, category=cat)
+    db.session.add(item)
+    
+    db.session.commit()
+    return emp1.id, emp2.id, manager.id, item.id
+
+
+# =========================================================================
+# TEST 1: Kullanıcı Kayıt Testi
+# =========================================================================
+def test_user_registration(app):
+    """Kullanıcının veritabanına başarıyla kaydedilebildiğini doğrular."""
+    with app.app_context():
+        it_dept = Department(name="İnsan Kaynakları")
+        db.session.add(it_dept)
+        
+        user = User(username="can", email="can@sirket.com", role="user", department=it_dept)
+        user.set_password("parola123")
+        db.session.add(user)
+        db.session.commit()
+        
+        saved_user = db.session.scalar(db.select(User).where(User.username == "can"))
+        assert saved_user is not None
+        assert saved_user.email == "can@sirket.com"
+        assert saved_user.department.name == "İnsan Kaynakları"
+
+
+# =========================================================================
+# TEST 2: Şifre Hash Testi
+# =========================================================================
+def test_password_hashing(app):
+    """Şifrelerin açık metin olarak saklanmadığını ve doğrulamanın çalıştığını test eder."""
+    with app.app_context():
+        user = User(username="testuser", email="test@test.com")
+        user.set_password("GuvenliSifre456")
+        
+        # Açık metin olmamalı
+        assert user.password_hash != "GuvenliSifre456"
+        
+        # Doğru şifre geçmeli, yanlış şifre kalmalı
+        assert user.check_password("GuvenliSifre456") is True
+        assert user.check_password("YanlisSifre") is False
+
+
+# =========================================================================
+# TEST 3: Giriş ve Yetkisiz Erişim Testi
+# =========================================================================
+def test_unauthorized_access(client):
+    """Oturum açmamış bir kullanıcının korunan sayfalara ve API'lere erişemediğini test eder."""
+    # Dashboard yönlendirmesi login gerektirir (Giriş yapılmadığı için 302 Redirect vermeli)
+    res = client.get('/')
+    assert res.status_code == 302
+    
+    # Kendi taleplerim API'si giriş gerektirir (302 Redirect)
+    res = client.get('/api/v1/requests/my')
+    assert res.status_code == 302
+
+
+# =========================================================================
+# TEST 4: Ürün Oluşturma Testi (Yetkili/Yetkisiz)
+# =========================================================================
+def test_product_creation(app, client):
+    """Yalnızca admin/manager rolündeki kullanıcıların ürün oluşturabildiğini doğrular."""
+    with app.app_context():
+        _, _, _, _ = setup_test_data()
+    
+    # Normal kullanıcı (ahmet) olarak giriş yapıp ürün eklemeyi dene
+    client.get('/test_login/ahmet')
+    res = client.post('/inventory/add', data={
+        'name': 'Yeni Laptop',
+        'category_id': 1,
+        'quantity': 10,
+        'critical_stock_level': 3,
+        'location': 'A-Depo',
+        'description': 'Yeni Nesil Laptop'
+    })
+    # Yetkisiz erişim olduğu için 403 hatası dönmeli
+    assert res.status_code == 403
+    
+    # Envanter Sorumlusu (selin) olarak giriş yapıp ürün eklemeyi dene
+    client.get('/test_login/selin')
+    res = client.post('/inventory/add', data={
+        'name': 'Yeni Laptop',
+        'category_id': 1,
+        'quantity': 10,
+        'critical_stock_level': 3,
+        'location': 'A-Depo',
+        'description': 'Yeni Nesil Laptop'
+    })
+    # Başarılı eklemeden sonra envanter sayfasına yönlendirmeli (302)
+    assert res.status_code == 302
+    
+    with app.app_context():
+        item = db.session.scalar(db.select(InventoryItem).where(InventoryItem.name == 'Yeni Laptop'))
+        assert item is not None
+        assert item.quantity == 10
+        assert item.location == 'A-Depo'
+
+
+# =========================================================================
+# TEST 5: Talep Oluşturma Testi (Miktar Sınırları ve Stok Aşımı)
+# =========================================================================
+def test_request_creation_and_limits(app, client):
+    """Miktarı <= 0 olan taleplerin engellendiğini, stok aşımında ise uyarı verildiğini test eder."""
+    with app.app_context():
+        _, _, _, item_id = setup_test_data()
+        
+    client.get('/test_login/ahmet')
+    
+    # 0 veya negatif miktarlı talep (Redirect olmalı ve hata vermeli)
+    res = client.post('/requests/create', data={'item_id': item_id, 'quantity': 0})
+    assert res.status_code == 302 # redirect to details/inventory
+    
+    # Mevcut stoktan fazla miktar talep etme (Stok aşımı - redirect olmalı ve pending olarak eklenmeli)
+    res = client.post('/requests/create', data={'item_id': item_id, 'quantity': 10})
+    assert res.status_code == 302
+    
+    with app.app_context():
+        req = db.session.get(InventoryRequest, 1)
+        assert req is not None
+        assert req.quantity == 10
+        assert req.status == 'pending'
+
+
+# =========================================================================
+# TEST 6: Stok Kontrol Testi (Yetersiz Stok Durumunda Onay Engeli)
+# =========================================================================
+def test_request_insufficient_stock(app, client):
+    """Talep edilen miktar envanter stoğundan büyükse onayın engellendiğini doğrular."""
+    with app.app_context():
+        _, _, _, item_id = setup_test_data()
+        
+    # Ahmet olarak giriş yapıp 10 adet Kablosuz Mouse talep et (Stokta sadece 5 var)
+    client.get('/test_login/ahmet')
+    client.post('/requests/create', data={'item_id': item_id, 'quantity': 10})
+    
+    # Yönetici (selin) olarak giriş yap
+    client.get('/test_login/selin')
+    
+    # Stoğu aşan talebi onaylamayı dene (yönlendirme yapmalı ve status approved olmamalı)
+    res = client.post('/requests/1/approve')
+    assert res.status_code == 302
+    
+    with app.app_context():
+        req = db.session.get(InventoryRequest, 1)
+        assert req.status == 'pending' # Onay engellenmiş olmalı, durum pending kalmalı
+
+
+# =========================================================================
+# TEST 7: Talep Reddetmede manager_note Zorunluluğu Testi
+# =========================================================================
+def test_request_rejection_validation(app, client):
+    """Talep reddedilirken manager_note belirtilmemişse işlemin reddedildiğini test eder."""
+    with app.app_context():
+        _, _, _, item_id = setup_test_data()
+        
+    # Ahmet talep oluşturur
+    client.get('/test_login/ahmet')
+    client.post('/requests/create', data={'item_id': item_id, 'quantity': 2})
+    
+    # Selin (yönetici) giriş yapar
+    client.get('/test_login/selin')
+    
+    # Boş açıklama ile reddetmeyi dene (durum pending kalmalı)
+    client.post('/requests/1/reject', data={'manager_note': '   '})
+    with app.app_context():
+        req = db.session.get(InventoryRequest, 1)
+        assert req.status == 'pending'
+    
+    # Açıklama ekleyerek reddet
+    client.post('/requests/1/reject', data={'manager_note': 'Yeterli bütçe kalmadı.'})
+    with app.app_context():
+        req = db.session.get(InventoryRequest, 1)
+        assert req.status == 'rejected'
+        assert req.manager_note == 'Yeterli bütçe kalmadı.'
+
+
+# =========================================================================
+# TEST 8: Talep Sahipliği ve İptal/Erişim Kontrolü Testi
+# =========================================================================
+def test_request_ownership_cancellation(app, client):
+    """Kullanıcının sadece kendi talebini iptal edebildiğini, başkasınınkine erişemediğini doğrular."""
+    with app.app_context():
+        _, _, _, item_id = setup_test_data()
+        
+    # Mehmet olarak giriş yapıp bir talep oluştur
+    client.get('/test_login/mehmet')
+    client.post('/requests/create', data={'item_id': item_id, 'quantity': 1}) # Req ID: 1
+    
+    # Ahmet olarak giriş yap
+    client.get('/test_login/ahmet')
+    
+    # Ahmet, Mehmet'in talebini iptal etmeyi denesin (HTTP 403 Forbidden olmalı)
+    res = client.post('/requests/1/cancel')
+    assert res.status_code == 403
+    
+    # Ahmet, Mehmet'in talebinin detaylarına erişmeyi denesin (HTTP 403 Forbidden olmalı)
+    res = client.get('/requests/1')
+    assert res.status_code == 403
+
+
+# =========================================================================
+# TEST 9: Otomatik Loglama (Event Listener) Testi
+# =========================================================================
+def test_request_auto_logging(app, client):
+    """Talep durum geçişlerinin (oluşturulma, onaylanma) otomatik loglandığını kontrol eder."""
+    with app.app_context():
+        _, _, _, item_id = setup_test_data()
+        
+    # Ahmet talep oluşturur (Durum: pending)
+    client.get('/test_login/ahmet')
+    client.post('/requests/create', data={'item_id': item_id, 'quantity': 2}) # Req ID: 1
+    
+    with app.app_context():
+        req = db.session.get(InventoryRequest, 1)
+        assert req is not None
+        # Başlangıç log kaydı oluşmuş olmalı
+        assert len(req.logs) == 1
+        assert req.logs[0].new_status == "pending"
+        assert "oluşturuldu" in req.logs[0].note
+        
+    # Selin onaylar (Durum: pending -> approved)
+    client.get('/test_login/selin')
+    client.post('/requests/1/approve')
+    
+    with app.app_context():
+        req = db.session.get(InventoryRequest, 1)
+        # Onay logu eklenmiş olmalı (toplam 2 log)
+        assert len(req.logs) == 2
+        assert req.logs[1].old_status == "pending"
+        assert req.logs[1].new_status == "approved"
+        assert "onaylandı" in req.logs[1].note
+
+# Pytest test paketi
