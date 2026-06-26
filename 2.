@@ -1,0 +1,618 @@
+{% extends "base.html" %}
+
+{% block title %}İşlem Geçmişi (Audit Logs) - Admin Panel{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-journal-text me-2 text-warning"></i>İşlem Geçmişi (Audit Logs)</h2>
+    <div>
+        <a href="{{ url_for('admin.users_list') }}" class="btn btn-outline-primary">
+            <i class="bi bi-people-fill me-1"></i> Kullanıcı Yönetimi
+        </a>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Zaman</th>
+                        <th>Talep ID</th>
+                        <th>Değişikliği Yapan</th>
+                        <th>Eski Durum</th>
+                        <th>Yeni Durum</th>
+                        <th class="pe-4">Detay / Not</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td class="ps-4 text-muted small">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>
+                            <a href="{{ url_for('requests.details', request_id=log.request_id) }}" class="badge bg-secondary text-decoration-none">
+                                Talep #{{ log.request_id }}
+                            </a>
+                        </td>
+                        <td>
+                            {% if log.operator %}
+                                <strong>{{ log.operator.username }}</strong>
+                                <span class="badge bg-light text-dark border small">{{ log.operator.role|upper }}</span>
+                            {% else %}
+                                <span class="text-muted small">Sistem</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if log.old_status %}
+                                {% if log.old_status == 'pending' %}
+                                    <span class="badge bg-warning text-dark">Beklemede</span>
+                                {% elif log.old_status == 'approved' %}
+                                    <span class="badge bg-success">Onaylandı</span>
+                                {% elif log.old_status == 'rejected' %}
+                                    <span class="badge bg-danger">Reddedildi</span>
+                                {% elif log.old_status == 'delivered' %}
+                                    <span class="badge bg-info text-dark">Teslim Edildi</span>
+                                {% elif log.old_status == 'cancelled' %}
+                                    <span class="badge bg-secondary">İptal Edildi</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if log.new_status == 'pending' %}
+                                <span class="badge bg-warning text-dark">Beklemede</span>
+                            {% elif log.new_status == 'approved' %}
+                                <span class="badge bg-success">Onaylandı</span>
+                            {% elif log.new_status == 'rejected' %}
+                                <span class="badge bg-danger">Reddedildi</span>
+                            {% elif log.new_status == 'delivered' %}
+                                <span class="badge bg-info text-dark">Teslim Edildi</span>
+                            {% elif log.new_status == 'cancelled' %}
+                                <span class="badge bg-secondary">İptal Edildi</span>
+                            {% endif %}
+                        </td>
+                        <td class="pe-4 text-muted small">{{ log.note or '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center py-4 text-muted">Henüz kayıtlı bir audit logu bulunmamaktadır.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% extends "base.html" %}
+
+{% block title %}Kullanıcı Yönetimi - Admin Panel{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-people-fill me-2 text-primary"></i>Kullanıcı Yönetimi</h2>
+    <div>
+        <a href="{{ url_for('admin.audit_logs') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-journal-text me-1"></i> Audit Günlükleri
+        </a>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">ID</th>
+                        <th>Kullanıcı Adı</th>
+                        <th>E-posta</th>
+                        <th>Departman</th>
+                        <th>Rol</th>
+                        <th class="pe-4 text-end">İşlemler</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td class="ps-4">{{ user.id }}</td>
+                        <td>
+                            <strong>{{ user.username }}</strong>
+                            {% if user.id == current_user.id %}
+                                <span class="badge bg-secondary ms-1">Siz</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ user.email }}</td>
+                        <td>
+                            {% if user.department %}
+                                <span class="badge bg-light text-dark border"><i class="bi bi-building me-1"></i>{{ user.department.name }}</span>
+                            {% else %}
+                                <span class="text-muted small">Yok</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if user.role == 'admin' %}
+                                <span class="badge bg-danger">ADMIN</span>
+                            {% elif user.role == 'inventory_manager' %}
+                                <span class="badge bg-success">ENVANTER SORUMLUSU</span>
+                            {% else %}
+                                <span class="badge bg-primary">KULLANICI</span>
+                            {% endif %}
+                        </td>
+                        <td class="pe-4 text-end">
+                            {% if user.id != current_user.id %}
+                            <form action="{{ url_for('admin.update_role', user_id=user.id) }}" method="POST" class="d-inline-block">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <div class="input-group input-group-sm">
+                                    <select name="role" class="form-select form-select-sm" style="max-width: 150px;">
+                                        <option value="user" {% if user.role == 'user' %}selected{% endif %}>Kullanıcı</option>
+                                        <option value="inventory_manager" {% if user.role == 'inventory_manager' %}selected{% endif %}>Sorumlu</option>
+                                        <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+                                    </select>
+                                    <button type="submit" class="btn btn-primary btn-sm">
+                                        Güncelle
+                                    </button>
+                                </div>
+                            </form>
+                            {% else %}
+                            <span class="text-muted small">Değiştirilemez</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% extends "base.html" %}
+
+{% block title %}Giriş Yap - Envanter & Talep Takip Sistemi{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+    <div class="col-md-5">
+        <div class="card p-4 shadow-lg border-0 rounded-4">
+            <div class="text-center mb-4">
+                <i class="bi bi-box-arrow-in-right text-primary display-4"></i>
+                <h3 class="mt-2 font-weight-bold">Sisteme Giriş</h3>
+                <p class="text-muted small">Lütfen kimlik bilgilerinizi giriniz</p>
+            </div>
+            
+            <form method="POST" action="">
+                {{ form.hidden_tag() }}
+                
+                <div class="mb-3">
+                    <label class="form-label font-weight-bold">{{ form.username.label.text }}</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-person"></i></span>
+                        {{ form.username(class="form-control" + (" is-invalid" if form.username.errors else ""), placeholder="Kullanıcı adınızı girin") }}
+                    </div>
+                    {% for error in form.username.errors %}
+                        <div class="text-danger small mt-1">{{ error }}</div>
+                    {% endfor %}
+                </div>
+                
+                <div class="mb-4">
+                    <label class="form-label font-weight-bold">{{ form.password.label.text }}</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-lock"></i></span>
+                        {{ form.password(class="form-control" + (" is-invalid" if form.password.errors else ""), placeholder="Şifrenizi girin") }}
+                    </div>
+                    {% for error in form.password.errors %}
+                        <div class="text-danger small mt-1">{{ error }}</div>
+                    {% endfor %}
+                </div>
+                
+                <div class="d-grid mb-3">
+                    {{ form.submit(class="btn btn-primary btn-lg rounded-3") }}
+                </div>
+            </form>
+            
+            <div class="text-center mt-3">
+                <p class="text-muted small mb-0">Hesabınız yok mu? <a href="{{ url_for('auth.register') }}" class="text-decoration-none">Şimdi Kayıt Olun</a></p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% extends "base.html" %}
+
+{% block title %}Kayıt Ol - Envanter & Talep Takip Sistemi{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 80vh; margin-top: 2rem; margin-bottom: 2rem;">
+    <div class="col-md-6">
+        <div class="card p-4 shadow-lg border-0 rounded-4">
+            <div class="text-center mb-4">
+                <i class="bi bi-person-plus text-success display-4"></i>
+                <h3 class="mt-2 font-weight-bold">Yeni Kayıt Oluştur</h3>
+                <p class="text-muted small">Sistemi kullanmak için hesap oluşturun</p>
+            </div>
+            
+            <form method="POST" action="">
+                {{ form.hidden_tag() }}
+                
+                <div class="mb-3">
+                    <label class="form-label font-weight-bold">{{ form.username.label.text }}</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-person"></i></span>
+                        {{ form.username(class="form-control" + (" is-invalid" if form.username.errors else ""), placeholder="Kullanıcı adınızı girin") }}
+                    </div>
+                    {% for error in form.username.errors %}
+                        <div class="text-danger small mt-1">{{ error }}</div>
+                    {% endfor %}
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label font-weight-bold">{{ form.email.label.text }}</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-envelope"></i></span>
+                        {{ form.email(class="form-control" + (" is-invalid" if form.email.errors else ""), placeholder="E-posta adresinizi girin") }}
+                    </div>
+                    {% for error in form.email.errors %}
+                        <div class="text-danger small mt-1">{{ error }}</div>
+                    {% endfor %}
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label font-weight-bold">{{ form.role.label.text }}</label>
+                        {{ form.role(class="form-select") }}
+                        {% for error in form.role.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                    
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label font-weight-bold">{{ form.department_id.label.text }}</label>
+                        {{ form.department_id(class="form-select") }}
+                        {% for error in form.department_id.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label font-weight-bold">{{ form.password.label.text }}</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-lock"></i></span>
+                            {{ form.password(class="form-control" + (" is-invalid" if form.password.errors else ""), placeholder="En az 6 karakter") }}
+                        </div>
+                        {% for error in form.password.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                    
+                    <div class="col-md-6 mb-4">
+                        <label class="form-label font-weight-bold">{{ form.confirm_password.label.text }}</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-lock-fill"></i></span>
+                            {{ form.confirm_password(class="form-control" + (" is-invalid" if form.confirm_password.errors else ""), placeholder="Tekrar girin") }}
+                        </div>
+                        {% for error in form.confirm_password.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
+                
+                <div class="d-grid mb-3">
+                    {{ form.submit(class="btn btn-success btn-lg rounded-3") }}
+                </div>
+            </form>
+            
+            <div class="text-center mt-3">
+                <p class="text-muted small mb-0">Zaten hesabınız var mı? <a href="{{ url_for('auth.login') }}" class="text-decoration-none">Giriş Yapın</a></p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Envanter & Talep Takip Sistemi{% endblock %}</title>
+    <!-- Bootstrap 5 CSS CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: #f8f9fa;
+        }
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow-sm">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('main.index') }}"><i class="bi bi-boxes me-2"></i>ENVANTER</a>
+            <button class="navbar-dark navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.index') }}"><i class="bi bi-speedometer2 me-1"></i> Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('inventory.index') }}"><i class="bi bi-list-check me-1"></i> Envanter</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('requests.index') }}"><i class="bi bi-send me-1"></i> Talepler</a>
+                    </li>
+                    {% if current_user.is_authenticated and current_user.role in ['admin', 'inventory_manager'] %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle text-warning" href="#" id="mgmtDropdown" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-gear-fill me-1"></i> Yönetim Paneli
+                            </a>
+                            <ul class="dropdown-menu shadow">
+                                <li><a class="dropdown-item" href="{{ url_for('inventory.manage_categories') }}"><i class="bi bi-tags-fill me-1"></i> Kategori Yönetimi</a></li>
+                                {% if current_user.role == 'admin' %}
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.users_list') }}"><i class="bi bi-people-fill me-1"></i> Kullanıcı Yönetimi</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.audit_logs') }}"><i class="bi bi-journal-text me-1"></i> Audit Günlükleri</a></li>
+                                {% endif %}
+                            </ul>
+                        </li>
+                    {% endif %}
+                </ul>
+                <ul class="navbar-nav ms-auto">
+                    {% if current_user.is_authenticated %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle text-white" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-person-circle me-1"></i> {{ current_user.username }} ({{ current_user.role|upper }})
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end shadow">
+                                <li><a class="dropdown-item" href="{{ url_for('auth.logout') }}"><i class="bi bi-box-arrow-right me-1"></i> Çıkış Yap</a></li>
+                            </ul>
+                        </li>
+                    {% else %}
+                        <li class="nav-item">
+                            <a class="nav-link text-white" href="{{ url_for('auth.login') }}"><i class="bi bi-box-arrow-in-right me-1"></i> Giriş</a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Flash Mesajları Bloğu -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category if category != 'error' else 'danger' }} alert-dismissible fade show card mb-3" role="alert">
+                        <div class="d-flex align-items-center">
+                            <i class="bi bi-info-circle-fill me-2 fs-5"></i>
+                            <div>{{ message }}</div>
+                        </div>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Ana İçerik Bloğu -->
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- Bootstrap 5 JS Bundle CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Envanter & Talep Takip Sistemi{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h1 class="h3 mb-1 text-gray-800">Hoş Geldiniz, {{ current_user.username }}</h1>
+        <p class="text-muted">Envanter durumu ve kritik stok uyarılarına hızlı genel bakış.</p>
+    </div>
+</div>
+
+<!-- Özet Kartları Grid'i -->
+<div class="row g-3 mb-4">
+    <!-- Toplam Ürün Kartı -->
+    <div class="col-md-3">
+        <div class="card h-100 p-3 bg-white border-start border-primary border-4">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="text-xs text-muted text-uppercase fw-bold mb-1">Toplam Ürün Çeşidi</div>
+                    <div class="h3 mb-0 fw-bold text-dark">{{ total_items }}</div>
+                </div>
+                <div class="text-primary fs-1"><i class="bi bi-box"></i></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toplam Talep Kartı -->
+    <div class="col-md-3">
+        <div class="card h-100 p-3 bg-white border-start border-success border-4">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="text-xs text-muted text-uppercase fw-bold mb-1">Toplam Talepler</div>
+                    <div class="h3 mb-0 fw-bold text-dark">{{ total_requests }}</div>
+                </div>
+                <div class="text-success fs-1"><i class="bi bi-file-earmark-text"></i></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Kritik Stok Kartı -->
+    <div class="col-md-3">
+        <div class="card h-100 p-3 bg-white border-start border-danger border-4">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="text-xs text-muted text-uppercase fw-bold mb-1">Kritik Stoktaki Ürünler</div>
+                    <div class="h3 mb-0 fw-bold text-danger">{{ critical_items_count }}</div>
+                </div>
+                <div class="text-danger fs-1"><i class="bi bi-exclamation-triangle-fill"></i></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bekleyen Talepler Kartı -->
+    <div class="col-md-3">
+        <div class="card h-100 p-3 bg-white border-start border-warning border-4">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="text-xs text-muted text-uppercase fw-bold mb-1">Bekleyen Talepler</div>
+                    <div class="h3 mb-0 fw-bold text-dark">{{ pending_requests_count }}</div>
+                </div>
+                <div class="text-warning fs-1"><i class="bi bi-clock-history"></i></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Kritik Stok Seviyesindeki Ürünler Listesi -->
+    <div class="col-lg-8 mb-4">
+        <div class="card h-100">
+            <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between">
+                <h6 class="m-0 fw-bold text-danger"><i class="bi bi-exclamation-octagon-fill me-2"></i>Kritik Stok Uyarısı Veren Ürünler</h6>
+                <span class="badge bg-danger rounded-pill">{{ critical_items|length }} Ürün</span>
+            </div>
+            <div class="card-body">
+                {% if critical_items %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Ürün Adı</th>
+                                    <th>Kategori</th>
+                                    <th class="text-center">Mevcut Stok</th>
+                                    <th class="text-center">Kritik Seviye</th>
+                                    <th>Durum</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in critical_items %}
+                                    <tr>
+                                        <td><strong>{{ item.name }}</strong></td>
+                                        <td>{{ item.category.name }}</td>
+                                        <td class="text-center"><span class="badge bg-danger">{{ item.quantity }}</span></td>
+                                        <td class="text-center">{{ item.critical_stock_level }}</td>
+                                        <td>
+                                            {% if item.quantity == 0 %}
+                                                <span class="text-danger fw-bold"><i class="bi bi-x-circle-fill me-1"></i> Stok Tükendi</span>
+                                            {% else %}
+                                                <span class="text-warning fw-bold"><i class="bi bi-exclamation-triangle-fill me-1"></i> Kritik Seviyede</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="text-center py-4">
+                        <div class="text-success fs-1"><i class="bi bi-check-circle-fill"></i></div>
+                        <p class="mt-2 mb-0 text-muted">Kritik stok seviyesinde ürün bulunmamaktadır. Her şey yolunda!</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Hızlı İşlemler Kartı -->
+    <div class="col-lg-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header bg-white py-3">
+                <h6 class="m-0 fw-bold text-dark"><i class="bi bi-lightning-charge-fill me-2 text-primary"></i>Hızlı İşlemler</h6>
+            </div>
+            <div class="card-body d-grid gap-3">
+                <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-primary p-3 text-start d-flex align-items-center">
+                    <i class="bi bi-search fs-3 me-3"></i>
+                    <div>
+                        <div class="fw-bold">Envanterde Arama Yap</div>
+                        <small class="text-muted">Ürünleri arayın, miktar ve kategorileri listeleyin.</small>
+                    </div>
+                </a>
+                <a href="{{ url_for('requests.index') }}" class="btn btn-outline-success p-3 text-start d-flex align-items-center">
+                    <i class="bi bi-plus-circle fs-3 me-3"></i>
+                    <div>
+                        <div class="fw-bold">Talep Oluştur veya Yönet</div>
+                        <small class="text-muted">Malzeme taleplerini inceleyin veya yeni talep iletin.</small>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% extends "base.html" %}
+
+{% block title %}Yetkisiz Erişim - 403{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 70vh;">
+    <div class="col-md-6 text-center">
+        <i class="bi bi-shield-lock-fill text-danger display-1 mb-4"></i>
+        <h1 class="display-5 font-weight-bold text-dark">Erişim Engellendi (403)</h1>
+        <p class="lead text-muted mb-4">Bu işlemi gerçekleştirmek veya bu sayfayı görüntülemek için yetkiniz bulunmamaktadır.</p>
+        <a href="{{ url_for('main.index') }}" class="btn btn-primary px-4 py-2">
+            <i class="bi bi-house-door me-1"></i> Ana Sayfaya Dön
+        </a>
+    </div>
+</div>
+{% endblock %}
+
+{% extends "base.html" %}
+
+{% block title %}Sayfa Bulunamadı - 404{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 70vh;">
+    <div class="col-md-6 text-center">
+        <i class="bi bi-exclamation-diamond-fill text-warning display-1 mb-4"></i>
+        <h1 class="display-5 font-weight-bold text-dark">Sayfa Bulunamadı (404)</h1>
+        <p class="lead text-muted mb-4">Aradığınız sayfa silinmiş, adı değiştirilmiş veya geçici olarak kullanılamıyor olabilir.</p>
+        <a href="{{ url_for('main.index') }}" class="btn btn-primary px-4 py-2">
+            <i class="bi bi-house-door me-1"></i> Ana Sayfaya Dön
+        </a>
+    </div>
+</div>
+{% endblock %}
+
+{% extends "base.html" %}
+
+{% block title %}Sunucu Hatası - 500{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 70vh;">
+    <div class="col-md-6 text-center">
+        <i class="bi bi-bug-fill text-danger display-1 mb-4"></i>
+        <h1 class="display-5 font-weight-bold text-dark">Sistem Hatası (500)</h1>
+        <p class="lead text-muted mb-4">Sunucuda beklenmeyen bir hata oluştu. Lütfen daha sonra tekrar deneyin.</p>
+        <a href="{{ url_for('main.index') }}" class="btn btn-primary px-4 py-2">
+            <i class="bi bi-house-door me-1"></i> Ana Sayfaya Dön
+        </a>
+    </div>
+</div>
+{% endblock %}
